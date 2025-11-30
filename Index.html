@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日本滑雪企 - 行程表 (可離線/靜態部署)</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Inter 字體 -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', 'Microsoft JhengHei', '微軟正黑體', sans-serif;
+            /* 滑雪主題背景：雪山和冰藍色 */
+            background-color: #f0f8ff; /* AliceBlue - 淺雪白 */
+            background-image: linear-gradient(135deg, #f0f8ff 0%, #e0f7fa 50%, #b3e5fc 100%); /* 淺藍到深藍漸變 */
+            min-height: 100vh;
+        }
+        /* 主容器樣式 - 確保在手機上全寬並置中 */
+        #app-container {
+            max-width: 100%;
+            padding-bottom: 80px; /* 給底部按鈕留出空間 */
+        }
+        /* 表格單元格編輯模式樣式 */
+        .editable:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px #81d4fa; /* Icy blue focus ring */
+            background-color: #ffffff;
+        }
+        /* 固定底部按鈕欄 */
+        .fixed-bottom {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+            background-color: rgba(255, 255, 255, 0.95); /* 半透明白底 */
+            backdrop-filter: blur(5px);
+            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body>
+
+<div id="app-container" class="p-4 mx-auto md:max-w-4xl">
+    <!-- Header -->
+    <header class="text-center py-6 bg-white bg-opacity-80 rounded-xl shadow-xl mb-6">
+        <h1 class="text-3xl font-extrabold text-sky-800 tracking-wider">
+            ❄️ 日本滑雪行程 ❄️
+        </h1>
+        <p class="text-sm text-slate-600 mt-1">點擊表格單元格即可編輯 (資料儲存在本機瀏覽器)</p>
+    </header>
+
+    <!-- 主表格區域 -->
+    <div id="schedule-table-container" class="overflow-x-auto rounded-xl shadow-2xl">
+        <!-- 表格將由 JavaScript 渲染 -->
+    </div>
+
+    <!-- 載入和錯誤訊息 -->
+    <div id="loading" class="text-center p-8 text-sky-700 font-bold hidden">
+        載入中，請稍候...
+    </div>
+    <div id="error-message" class="text-center p-4 bg-red-100 text-red-700 font-medium rounded-lg mt-4 hidden">
+        發生錯誤！
+    </div>
+
+    <!-- 模態視窗用於提示/確認 (取代 alert/confirm) -->
+    <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 hidden">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm">
+            <h3 id="modal-title" class="text-xl font-bold mb-4 text-slate-800"></h3>
+            <p id="modal-message" class="text-slate-600 mb-6"></p>
+            <div id="modal-actions" class="flex justify-end space-x-3">
+                <!-- Actions will be added by JS -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 固定底部按鈕欄 -->
+<div class="fixed-bottom p-3">
+    <div class="flex flex-wrap justify-center gap-3 md:gap-6 mx-auto md:max-w-4xl">
+        <button id="addRowBtn" class="flex-1 min-w-[120px] bg-sky-600 hover:bg-sky-700 text-white font-semibold py-3 px-4 rounded-full transition duration-300 shadow-lg shadow-sky-500/50">
+            + 增加時間段
+        </button>
+        <button id="addColumnBtn" class="flex-1 min-w-[120px] bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-4 rounded-full transition duration-300 shadow-lg shadow-emerald-500/50">
+            + 增加日期
+        </button>
+    </div>
+</div>
+
+<script>
+    // LocalStorage Key
+    const STORAGE_KEY = 'skiScheduleData';
+    let scheduleData = { headers: [], schedule: [] }; // Local state for schedule
+
+    // UI elements
+    const tableContainer = document.getElementById('schedule-table-container');
+    const loadingEl = document.getElementById('loading');
+    const errorEl = document.getElementById('error-message');
+    const addRowBtn = document.getElementById('addRowBtn');
+    const addColumnBtn = document.getElementById('addColumnBtn');
+    const modalEl = document.getElementById('modal');
+    const modalTitleEl = document.getElementById('modal-title');
+    const modalMessageEl = document.getElementById('modal-message');
+    const modalActionsEl = document.getElementById('modal-actions');
+
+    // 初始數據 (來自您上傳的 CSV 檔案)
+    const dateHeaders = ["12/13(五)", "12/14(六)", "12/15(日)", "12/16(一)", "12/17(二)", "12/18(三)", "12/19(四)", "12/20(五)", "12/21(六)"];
+    const initialSchedule = [
+        { Time: "6:00 - 10:00", "12/13(五)": "搭飛機", "12/14(六)": "滑雪", "12/15(日)": "滑雪", "12/16(一)": "滑雪", "12/17(二)": "滑雪", "12/18(三)": "出企走走(開車?)", "12/19(四)": "出企走走(開車?)", "12/20(五)": "出企走走(開車?)", "12/21(六)": "Go Home 🥺", Notes: "滑雪接駁+纜車訂單" },
+        { Time: "10:00 - 12:00", "12/13(五)": "搭飛機", "12/14(六)": "", "12/15(日)": "", "12/16(一)": "", "12/17(二)": "", "12/18(三)": "", "12/19(四)": "", "12/20(五)": "", "12/21(六)": "", Notes: "Judy's 旅遊" },
+        { Time: "12:00 - 14:00 午餐", "12/13(五)": "飛機餐(?)", "12/14(六)": "雪場處理", "12/15(日)": "雪場處理", "12/16(一)": "雪場處理", "12/17(二)": "雪場處理", "12/18(三)": "和牛", "12/19(四)": "吃啥", "12/20(五)": "吃啥", "12/21(六)": "", Notes: "車車 794270895" },
+        { Time: "14:00 - 16:00", "12/13(五)": "去札幌 Check in 吃飯", "12/14(六)": "滑雪", "12/15(日)": "滑雪", "12/16(一)": "滑雪", "12/17(二)": "滑雪", "12/18(三)": "pending", "12/19(四)": "pending", "12/20(五)": "pending", "12/21(六)": "", Notes: "租車需知&Know how" },
+        { Time: "16:00 - 18:00", "12/13(五)": "", "12/14(六)": "滑雪", "12/15(日)": "滑雪", "12/16(一)": "滑雪", "12/17(二)": "滑雪", "12/18(三)": "pending", "12/19(四)": "pending", "12/20(五)": "pending", "12/21(六)": "", Notes: "租車需知&Know how" },
+        { Time: "18:00 - 20:00", "12/13(五)": "", "12/14(六)": "滑雪", "12/15(日)": "滑雪", "12/16(一)": "滑雪", "12/17(二)": "滑雪", "12/18(三)": "pending", "12/19(四)": "pending", "12/20(五)": "pending", "12/21(六)": "", Notes: "eSIM" },
+        { Time: "20:00 - 24:00", "12/13(五)": "", "12/14(六)": "累累", "12/15(日)": "累累", "12/16(一)": "累累", "12/17(二)": "累累", "12/18(三)": "pending", "12/19(四)": "pending", "12/20(五)": "pending", "12/21(六)": "", Notes: "住宿" },
+    ];
+
+    /**
+     * 顯示自定義模態視窗
+     * @param {string} title 標題
+     * @param {string} message 訊息內容或HTML
+     * @param {Array<{label: string, style: string, action: function}>} buttons 按鈕配置
+     */
+    function showModal(title, message, buttons) {
+        modalTitleEl.textContent = title;
+        // 允許傳入 HTML 讓新增日期時可以放輸入框
+        modalMessageEl.innerHTML = message;
+        modalActionsEl.innerHTML = '';
+
+        buttons.forEach(btnConfig => {
+            const button = document.createElement('button');
+            button.textContent = btnConfig.label;
+            button.className = `py-2 px-4 rounded-lg font-semibold transition duration-200 ${btnConfig.style}`;
+            button.onclick = () => {
+                hideModal();
+                btnConfig.action();
+            };
+            modalActionsEl.appendChild(button);
+        });
+
+        modalEl.classList.remove('hidden');
+    }
+
+    // 隱藏模態視窗
+    function hideModal() {
+        modalEl.classList.add('hidden');
+    }
+
+    // --- LocalStorage Persistence ---
+
+    /**
+     * 從 LocalStorage 載入行程數據，若無則使用初始數據。
+     */
+    function loadScheduleData() {
+        try {
+            const savedData = localStorage.getItem(STORAGE_KEY);
+            if (savedData) {
+                scheduleData = JSON.parse(savedData);
+                console.log("Data loaded from LocalStorage.");
+            } else {
+                // Initializing with CSV data structure
+                scheduleData.headers = ["時間"].concat(dateHeaders).concat(["備註", "連結"]);
+                scheduleData.schedule = initialSchedule.map(row => {
+                    // Create a clean object from the initial row data
+                    const newRow = { Time: row.Time };
+                    scheduleData.headers.slice(1).forEach(header => {
+                        // Attempt to map headers, defaulting to an empty string if not found
+                        const value = row[header] !== undefined ? row[header] : 
+                                       row[header.replace('備註', 'Notes')] !== undefined ? row[header.replace('備註', 'Notes')] : 
+                                       row[header.replace('連結', 'URL')] !== undefined ? row[header.replace('連結', 'URL')] : '';
+                        newRow[header] = value;
+                    });
+                    return newRow;
+                });
+                saveScheduleData(); // Save initial data immediately
+                console.log("No saved data found. Initializing with default data.");
+            }
+        } catch (e) {
+            console.error("Failed to load data from LocalStorage:", e);
+            errorEl.textContent = "載入數據失敗，請檢查瀏覽器設定。";
+            errorEl.classList.remove('hidden');
+        }
+
+        renderSchedule();
+        loadingEl.classList.add('hidden');
+    }
+
+    /**
+     * 將當前行程數據儲存到 LocalStorage
+     */
+    function saveScheduleData() {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(scheduleData));
+            // console.log("Schedule data saved successfully to LocalStorage.");
+        } catch (e) {
+            console.error("Failed to save data to LocalStorage:", e);
+            errorEl.textContent = "數據儲存失敗，可能超過儲存限制。";
+            errorEl.classList.remove('hidden');
+        }
+    }
+
+    /**
+     * 渲染行程表格
+     */
+    function renderSchedule() {
+        if (!scheduleData.headers || !scheduleData.headers.length) {
+            tableContainer.innerHTML = '<p class="text-center p-4 text-slate-500">沒有行程數據。</p>';
+            return;
+        }
+
+        const headers = scheduleData.headers;
+        const schedule = scheduleData.schedule;
+        let html = `
+            <table class="w-full text-sm text-left text-slate-900 border-collapse">
+                <thead class="text-xs uppercase text-white bg-sky-700 sticky top-0">
+                    <tr>
+                        ${headers.map(header => `
+                            <th scope="col" class="py-3 px-2 md:px-4 text-center font-bold whitespace-nowrap border-b border-sky-600">
+                                ${header}
+                            </th>
+                        `).join('')}
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        schedule.forEach((row, rowIndex) => {
+            html += `
+                <tr class="bg-white border-b border-slate-200 hover:bg-sky-50 transition duration-150">
+            `;
+            headers.forEach((header, colIndex) => {
+                const isTimeColumn = colIndex === 0;
+                const cellValue = row[header] || '';
+
+                // Handle '連結' column for rendering as link
+                let displayValue = cellValue;
+                if (header === '連結' && cellValue.startsWith('http')) {
+                    // 只顯示前20個字元，防止網址過長破壞排版
+                    const displayText = cellValue.length > 20 ? `${cellValue.substring(0, 20)}...` : cellValue;
+                    displayValue = `<a href="${cellValue}" target="_blank" class="text-sky-600 hover:text-sky-800 underline break-words">${displayText}</a>`;
+                }
+
+
+                html += `
+                    <td class="py-2 px-2 md:px-4 text-center border border-slate-100 ${isTimeColumn ? 'font-bold bg-sky-50 sticky left-0 z-0 whitespace-nowrap' : 'editable'}"
+                        data-row-index="${rowIndex}"
+                        data-header="${header}"
+                        ${isTimeColumn ? '' : 'contenteditable="true"'}>
+                        ${displayValue}
+                    </td>
+                `;
+            });
+            html += `</tr>`;
+        });
+
+        html += `
+                </tbody>
+            </table>
+        `;
+        tableContainer.innerHTML = html;
+        attachEditListeners();
+    }
+
+    /**
+     * 為可編輯的單元格附加事件監聽器
+     */
+    function attachEditListeners() {
+        document.querySelectorAll('.editable[contenteditable="true"]').forEach(cell => {
+            // Remove old listeners to prevent duplication
+            cell.removeEventListener('blur', handleCellEdit);
+            
+            // Add new listener
+            cell.addEventListener('blur', handleCellEdit);
+        });
+    }
+
+    /**
+     * 處理單元格編輯事件
+     * @param {Event} event 
+     */
+    function handleCellEdit(event) {
+        const cell = event.target;
+        const rowIndex = parseInt(cell.dataset.rowIndex);
+        const header = cell.dataset.header;
+        // 使用 textContent 確保取得編輯後的所有文本
+        const finalValue = cell.textContent.trim();
+
+        if (scheduleData.schedule[rowIndex] && scheduleData.schedule[rowIndex][header] !== finalValue) {
+            scheduleData.schedule[rowIndex][header] = finalValue;
+            saveScheduleData();
+            
+            // 如果是連結欄位，重新渲染以確保新輸入的網址能轉換成可點擊的 <a> 標籤
+            if (header === '連結') {
+                renderSchedule(); 
+            }
+        }
+    }
+
+    /**
+     * 增加新的時間段 (行)
+     */
+    addRowBtn.addEventListener('click', () => {
+        showModal(
+            '新增時間段',
+            `
+            <p class="text-slate-600 mb-4">請輸入新的時間段 (例如: 24:00 - 02:00)</p>
+            <input type="text" id="modal-input-row" placeholder="新的時間段" class="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400">
+            `,
+            [
+                {
+                    label: '取消',
+                    style: 'bg-slate-300 hover:bg-slate-400 text-slate-800',
+                    action: () => {}
+                },
+                {
+                    label: '新增',
+                    style: 'bg-sky-600 hover:bg-sky-700 text-white',
+                    action: () => {
+                        const newTime = document.getElementById('modal-input-row').value.trim();
+                        if (newTime) {
+                            const newRow = { Time: newTime };
+                            // 為所有欄位初始化空字串
+                            scheduleData.headers.slice(1).forEach(header => {
+                                newRow[header] = '';
+                            });
+                            scheduleData.schedule.push(newRow);
+                            saveScheduleData();
+                            renderSchedule();
+                        }
+                    }
+                }
+            ]
+        );
+        setTimeout(() => document.getElementById('modal-input-row').focus(), 100);
+    });
+
+    /**
+     * 增加新的日期 (列)
+     */
+    addColumnBtn.addEventListener('click', () => {
+        showModal(
+            '新增日期',
+            `
+            <p class="text-slate-600 mb-4">請輸入新的日期/列標題 (例如: 12/22(日))</p>
+            <input type="text" id="modal-input-col" placeholder="新的列標題" class="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400">
+            `,
+            [
+                {
+                    label: '取消',
+                    style: 'bg-slate-300 hover:bg-slate-400 text-slate-800',
+                    action: () => {}
+                },
+                {
+                    label: '新增',
+                    style: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+                    action: () => {
+                        const newHeader = document.getElementById('modal-input-col').value.trim();
+                        if (newHeader && !scheduleData.headers.includes(newHeader)) {
+                            // 插入到倒數第三個 (在備註和連結前)
+                            const insertIndex = scheduleData.headers.length - 2; 
+                            scheduleData.headers.splice(insertIndex, 0, newHeader);
+                            
+                            // 更新所有現有行
+                            scheduleData.schedule.forEach(row => {
+                                row[newHeader] = ''; 
+                            });
+
+                            saveScheduleData();
+                            renderSchedule();
+
+                        } else if (newHeader) {
+                            showModal('錯誤', '該日期標題已存在或無效！', [{ label: '關閉', style: 'bg-red-500 hover:bg-red-600 text-white', action: () => {} }]);
+                        }
+                    }
+                }
+            ]
+        );
+        setTimeout(() => document.getElementById('modal-input-col').focus(), 100);
+    });
+
+
+    // --- Application Entry Point ---
+    window.onload = loadScheduleData;
+</script>
+
+</body>
+</html>
